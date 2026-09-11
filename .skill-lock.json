@@ -1,0 +1,41 @@
+{
+  "version": 3,
+  "skills": {
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/vercel-labs/skills.git",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "skillFolderHash": "76a98a285cb0434f3d39e1a873823556330e398b",
+      "installedAt": "2026-08-12T18:41:44.926Z",
+      "updatedAt": "2026-08-12T18:41:44.926Z"
+    },
+    "archify": {
+      "source": "tt-a1i/archify",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/tt-a1i/archify.git",
+      "skillPath": "archify/SKILL.md",
+      "skillFolderHash": "428ec4aaf7c87f172fc6ee15a78f52f2fafdb2d9",
+      "installedAt": "2026-08-30T01:37:57.322Z",
+      "updatedAt": "2026-08-30T01:37:57.322Z"
+    }
+  },
+  "dismissed": {
+    "findSkillsPrompt": true
+  },
+  "lastSelectedAgents": [
+    "amp",
+    "antigravity",
+    "antigravity-cli",
+    "cline",
+    "codex",
+    "cursor",
+    "deepagents",
+    "gemini-cli",
+    "github-copilot",
+    "kimi-code-cli",
+    "opencode",
+    "warp",
+    "zed"
+  ]
+}

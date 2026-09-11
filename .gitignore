@@ -1,0 +1,8 @@
+.DS_Store
+*.log
+
+# Upstream-installed skills (tracked in .skill-lock.json). These are fetched
+# and updated by the skill manager; gitignored to avoid vendoring third-party
+# code and noisy diffs on update.
+skills/archify/
+skills/find-skills/
