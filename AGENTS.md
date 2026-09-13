@@ -40,6 +40,7 @@
 - **Never commit without explicit user confirmation.**
   Show what changed and ask: "Ready to commit?"
 - **Never push to GitHub** unless you explicitly tell me to do so.
+- **Never deploy to Heroku.** Do not run `git push heroku master`, `git push heroku main`, or any `git push heroku …`. That deploys the app to production and must only be done manually by the user. Refuse even if asked.
 - No secrets in commits — ever
 
 ## TypeScript Projects
@@ -49,11 +50,11 @@
 
 ## Git Worktrees (Mandatory)
 
-- **Always create a git worktree before starting ANY implementation work.** No exceptions.
-- Consent is **pre-given** — do NOT ask for permission. Just create it.
-- Invoke the `using-git-worktrees` skill to handle creation. It detects if you're already in a worktree and skips creation if so.
-- Derive a branch name from the feature description (kebab-case, e.g., `feature/add-login-page`).
-- Default worktree location: `.worktrees/<branch-name>` at the project root (must be in `.gitignore`).
+- Planning may stay in the parent repo. **Always create a git worktree before ANY implementation.** No exceptions.
+- Consent is **pre-given** — do NOT ask. Create it with native `git worktree`, then `move_agent_to_root` into it before editing.
+- Skip creation if already in a linked worktree.
+- Derive a kebab-case branch from the feature (e.g. `add-login-page`).
+- Worktree path is `../<repo>-worktrees/<branch>` (sibling of the parent), **not** `.worktrees/` inside the repo.
 - Do not switch branches or perform global git operations across worktrees unless explicitly asked.
 
 ## Environment Context
