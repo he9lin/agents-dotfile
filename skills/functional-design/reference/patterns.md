@@ -67,6 +67,24 @@ Summary: **executable = unbounded constructors/operators, fixed ways to execute.
 
 Never embed a function inside a declarative model — that node becomes opaque and can no longer be serialized, optimized, or described.
 
+This choice is independent of **how a combinator is implemented**. A combinator can often be implemented with different encodings depending on performance or language constraints:
+
+1. **The Declarative/Recursive Way:** Defining combinators purely by composing other higher-order functions or using recursion (e.g., defining `filter` using `reduce`).
+2. **The Imperative/Loop Way:** Writing a combinator using internal mutable loops for maximum execution speed while keeping the external API clean and declarative.
+
+```ts
+const filter = <A>(pred: (a: A) => boolean, xs: readonly A[]): A[] =>
+  xs.reduce((acc, x) => (pred(x) ? [...acc, x] : acc), [] as A[]);
+
+const filterFast = <A>(pred: (a: A) => boolean, xs: readonly A[]): A[] => {
+  const out: A[] = [];
+  for (const x of xs) if (pred(x)) out.push(x);
+  return out;
+};
+```
+
+Same type, same callers. Default to composition/recursion; use an internal loop when recursion hurts. Never leak mutation.
+
 ---
 
 ## 3. Operators Close Over the Type
@@ -212,7 +230,8 @@ This is the FP counterpart of the DDD boundary rule: never cross contexts direct
 ## Checklist
 
 - [ ] Every domain concept is an ADT or wrapper type — no raw primitives
-- [ ] The encoding was chosen deliberately and is stated
+- [ ] Candidate domains were hunted (scheduler, parser, filter, stream, worker, …) and skips named
+- [ ] The encodings were chosen deliberately (model + combinator) and stated
 - [ ] Operators close over the domain type (no void/Unit/nil returns)
 - [ ] Primitives are minimal and orthogonal; the rest are derived
 - [ ] Each execution concern is a separate interpreter
