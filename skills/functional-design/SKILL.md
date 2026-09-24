@@ -1,6 +1,6 @@
 ---
 name: functional-design
-description: Hunt for places to apply functional design while planning or reviewing a feature, project, or codebase. Use when planning a subsystem or internal DSL; modeling a domain with types; or reviewing for ADTs, combinators, composability, orthogonality, and interpreters. Trigger on retry/schedules, parsers, validators/filters/rules, streams/ETL, polling/workers, state machines, workflows, or symptoms like primitive obsession, god services, void operators, DateTime.Now in domain logic, duplicated run-vs-explain logic. Covers TypeScript, Elixir, Rust, and F#.
+description: Hunt for places to apply functional design while planning or reviewing a feature, project, or codebase. Use when planning a subsystem or internal DSL; modeling a domain with types; reviewing for ADTs, combinators, composability, orthogonality, and interpreters; or designing tests (functional core, imperative shell, mock-minimal unit tests). Trigger on retry/schedules, parsers, validators/filters/rules, streams/ETL, polling/workers, state machines, workflows, Mox/expect in unit tests, core functions taking services, DateTime.Now or Repo in domain logic, or duplicated run-vs-explain logic. Covers TypeScript, Elixir, Effect, Rust, and F#.
 ---
 
 # Functional Design
@@ -27,6 +27,21 @@ That is also an **abstract data type**: a type plus the operations that construc
 
 Your global rules ("make illegal states unrepresentable", ADT modeling, translate at boundaries) are the **constitution**; this skill is the **playbook**.
 
+## Functional core, imperative shell
+
+Separate **deciding** from **doing**. Full rules: `reference/functional-core.md` (Elixir and TypeScript/Effect).
+
+- The **core** decides: pure functions that take data and return data. No I/O, no DB, no HTTP, no clock, no randomness, no process messaging, no logging.
+- The **shell** does: fetches inputs, calls the core, performs the effects the core asked for, persists results.
+- Core functions receive **states and results**, never collaborators that can perform effects. If a function needs to "call something" to decide, split it: the shell performs the call, then passes the result into the next pure step.
+- When effects and decisions interleave, do **not** fetch every effect result up front if that changes ordering (e.g. charge before reserve). Split into pure steps with the shell in between, or (preferred for multi-effect flows) **return commands as data** and let the shell interpret them.
+- In Effect-TS, keep decision logic in plain functions returning data; use `Effect` only in the shell; model external systems as `Context.Tag` services via `Layer`.
+- Every external system sits behind an **explicit contract** (`@behaviour` or Effect service). Your own database is **not** an external boundary for testing.
+
+**Unit tests** target the core and use **no mocks**: construct data, call the function, assert on output (including emitted commands). If a unit test seems to need a mock, the code is not pure yet — refactor instead of mocking.
+
+**Full-flow / integration tests** exercise the public entry point. Use the real DB. Mock only external boundaries (Mox, Bypass, test `Layer`), including `expect`-style call assertions. Keep these few: happy path plus one test per distinct failure-handling path. Mocks are **nouns, not verbs** — every mock implements an explicit contract. Never mock internal modules, structs, pure functions, or the repo.
+
 ## Hunt first (required in both modes)
 
 Before writing a plan or a review comment, **scan the feature, spec, or codebase for candidate domains**. A candidate is a place with **many solutions you want to combine** — policies, grammars, pipelines, rules, schedules, queries, workflows — not a procedure you will write once.
@@ -35,7 +50,7 @@ Do not skip this scan. Do not assume the whole app is one domain. Do not force a
 
 For every candidate (and every skip), produce the fields in [Output](#output). Use the catalog in `reference/spotting.md` as the hunt list. Typical hits: **scheduler**, **parser**, **validator/filter/rules**, **stream/pipeline**, **polling/worker with time**, **lifecycle ADT**, **optics**, **formula**, **workflow**.
 
-**Look-for (code and specs):** `retry`, backoff, cron, `setTimeout` chains; regex / `split` / hand-rolled grammars; `if` trees for "match this AND that"; `InputStream` / file concat / ETL steps; `DateTime.Now` / `new Date()` inside business logic; stringly status flags (`"ready"|"received"|...` as `string` or booleans that can contradict); methods that return `void` and mutate; the same rule implemented once to run and again to explain or serialize.
+**Look-for (code and specs):** `retry`, backoff, cron, `setTimeout` chains; regex / `split` / hand-rolled grammars; `if` trees for "match this AND that"; `InputStream` / file concat / ETL steps; `DateTime.Now` / `DateTime.utc_now/0` / `new Date()` inside business logic; stringly status flags (`"ready"|"received"|...` as `string` or booleans that can contradict); methods that return `void` and mutate; the same rule implemented once to run and again to explain or serialize; core functions taking `repo` / `gateway` / five collaborators; `Repo` / `Logger` / HTTP / `Effect` services inside core; unit tests that are mostly `expect(...).to receive`; mocked Ecto repos used to test business rules.
 
 ## Choose the encodings
 
@@ -64,7 +79,7 @@ Callers still compose combinators; only the body changes. Default to declarative
 
 ## Planning Mode
 
-Complete every step. Do not approve a plan without the hunt output and, for each candidate you keep, the eight design outputs.
+Complete every step. Do not approve a plan without the hunt output and, for each candidate you keep, design outputs 1–9.
 
 0. **Hunt** — scan spec + existing code with `reference/spotting.md`. List candidates and skips.
 1. **Name the domain** and the problems it solves.
@@ -72,15 +87,16 @@ Complete every step. Do not approve a plan without the hunt output and, for each
 3. **Choose the encodings** (tables above) and state why.
 4. **List primitives** — constructors + operators (combinators). Every operator takes the domain type in and returns the domain type out. Tag primitive vs derived; demote anything expressible in terms of others.
 5. **Test the primitives** — composable, expressive, orthogonal (no overlaps) → minimal. Check that real business sentences become composition (`primary.orElse(fragments).buffered`, `exponential.andThen(fixed)`, `username + char('@') + server`).
-6. **Plan interpreters** — each execution concern (`run`, `describe`, `validate`, `preview`, `toJson`) as its own total function over the model. Effects (`DateTime.Now`, I/O) live only here.
+6. **Plan interpreters** — each execution concern (`run`, `describe`, `validate`, `preview`, `toJson`) as its own total function over the model. Effects (`DateTime.Now`, I/O) live only here. Multi-effect flows: core returns commands; the shell is the interpreter.
 7. **Constrain with types** — encode which operations are legal, at the strongest level the language allows.
-8. **Put effects at the boundary** — translate into the effect domain (`ZIO` / `IO` / `Promise`) last, at the edge.
+8. **Put effects at the boundary** — the shell fetches, calls the core, performs commanded effects, persists. Translate into the effect domain (`ZIO` / `IO` / `Promise` / `Effect`) last. Preserve effect order (see `reference/functional-core.md` §3).
+9. **Plan tests** — bulk of cases (all edges and errors) as core unit tests with **no mocks**. Few full-flow tests through the public entry point: real DB, mocks only at external contracts, `expect` allowed there. Follow `reference/functional-core.md` §5–7.
 
 ## Review Mode
 
 Scan in two passes. Report every finding with **name, severity, location, and fix**.
 
-**Pass A — missed domains.** Walk `reference/spotting.md`. For each hit, if the code is a class/service/loop instead of model + constructors + combinators + interpreter, report **Missed domain** (not a style nit). Propose the type, constructors, combinators, and interpreters.
+**Pass A — missed domains.** Walk `reference/spotting.md` and `reference/functional-core.md`. For each hit, if the code is a class/service/loop instead of model + constructors + combinators + interpreter, or if business logic lives in the shell and is only tested with mocks, report **Missed domain** (not a style nit). Propose the type, constructors, combinators, interpreters, and the core/shell/test split.
 
 **Pass B — malformed domains.** If a functional domain already exists (or should), scan for named violations:
 
@@ -93,7 +109,11 @@ Scan in two passes. Report every finding with **name, severity, location, and fi
 | Runtime check types could own | `throw` on a forbidden state | type-level constraint |
 | Opaque AST node | function embedded in a data model | keep models pure data |
 | Overlapping primitives | two primitives do the same job | keep one, derive the other |
-| Effect in domain logic | I/O or clock inside the model | move to interpreter / boundary |
+| Effect in domain logic | I/O, clock, `Repo`, `Logger`, or `Effect` inside the core | move to shell / interpreter; pass time and IDs as values |
+| Core takes services | function args are `repo`, `gateway`, or a pile of collaborators | pass states and results; shell does the calls |
+| Mocked unit test | unit test is `expect` / `to receive` on internals | purify the core; assert input → output |
+| Mocked database | business logic tested against a fake repo | use real Postgres; put logic in the core |
+| Reordered effects for purity | charge-then-reserve (or similar) so one function can stay "pure" | split steps or return commands; keep order |
 | Non-exhaustive interpreter | wildcard default hides cases | total match, no catch-all |
 | Leaky combinator | mutation or loop visible in the API | keep mutation inside; same declarative signature |
 | Duplicated interpreters | run-logic copied into explain/serialize | one model, many interpreters |
@@ -111,14 +131,16 @@ For each:
 - Evidence (what combinable solutions exist)
 - Model / constructors / combinators (sketch)
 - Encoding (model + combinator) and why
-- Interpreters (`run`, `describe`, …)
+- Interpreters (`run`, `describe`, commands the shell executes)
+- Core vs shell split; values in, commands out
+- Tests: core unit (no mocks) vs full-flow (real DB, mock externals only)
 - Severity if review: missed vs malformed
 
 ## Skip
 Places that are CRUD, glue, or one-shot — one line each, why least power applies.
 
 ## Plan or fixes
-Only for candidates you keep. Planning: the eight design outputs. Review: violation name, location, fix.
+Only for candidates you keep. Planning: design outputs 1–9. Review: violation name, location, fix.
 ```
 
 ## Common Mistakes
@@ -131,9 +153,14 @@ Only for candidates you keep. Planning: the eight design outputs. Review: violat
 - Validating with `if`/`throw` what a type could forbid
 - Executing inside the model instead of writing an interpreter
 - Exposing a mutable/loop implementation as the combinator's public contract
+- Passing services into the core instead of values the shell already fetched
+- A unit test that needs a mock — the design is wrong, not the test
+- Mocking the database to test business logic
+- Changing effect ordering so the code "looks pure"
 
 ## Reference
 
 - `reference/spotting.md` — where to look (scheduler, parser, validator, stream, …)
+- `reference/functional-core.md` — functional core, imperative shell, mock-minimal testing
 - `reference/patterns.md` — patterns with code templates
 - `reference/language-mapping.md` — TypeScript / Elixir / Rust / F# mappings

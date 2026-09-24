@@ -236,4 +236,5 @@ This is the FP counterpart of the DDD boundary rule: never cross contexts direct
 - [ ] Primitives are minimal and orthogonal; the rest are derived
 - [ ] Each execution concern is a separate interpreter
 - [ ] Illegal states are prevented at the strongest level the language allows
-- [ ] Effects live only at the boundary
+- [ ] Effects live only at the boundary (shell); core takes values, not services
+- [ ] Core unit tests have no mocks; full-flow tests mock only external contracts

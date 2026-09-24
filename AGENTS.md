@@ -33,7 +33,9 @@
 5. **DDD's boundary rule** — bounded contexts are strict. Translate at the edges.
    → never cross context boundaries directly. Convert types at the boundary.
 
-   → Full procedure for rules 3–5 (planning a domain model, or reviewing code for it): use the `functional-design` skill.
+6. **Functional core rule** — the core decides (pure data in, data or commands out); the shell does (I/O, DB, clock). Unit tests of the core use **no mocks**. Full-flow tests use the real DB and mock only external boundaries.
+
+   → Full procedure for rules 3–6 (planning a domain model, reviewing it, or writing its tests): use the `functional-design` skill.
 
 ## Git
 
