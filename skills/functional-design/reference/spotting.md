@@ -170,7 +170,21 @@ Combinator vocabulary that keeps showing up: `++` / `andThen` (sequence), `&&` (
 
 **Look for:** a parser that does I/O; a schedule that sends HTTP; a filter that writes to the DB.
 
-**Fix:** keep each domain pure; interpret both into an effect type (`Promise` / `IO` / `ZIO`) **last**, at the boundary. Crossing contexts with the same type is a DDD boundary miss.
+**Fix:** keep each domain pure; interpret both into an effect type (`Promise` / `IO` / `ZIO` / `Effect`) **last**, at the boundary. Crossing contexts with the same type is a DDD boundary miss.
+
+---
+
+## Functional core vs shell (and tests)
+
+Not a domain of its own — a split every candidate must have. Full rules: `functional-core.md`.
+
+**Look for:** core functions taking `repo` / `gateway` / five collaborators; `Repo`, `Logger`, `DateTime.utc_now/0`, HTTP, or `Effect` services inside decision logic; unit tests that are mostly `expect` / `to receive`; mocked Ecto repos used to test business rules; charging (or similar) before reserve so one function can stay "pure".
+
+**Model:** core = values in, values or **commands** out. Shell = fetch, call core, interpret commands, persist.
+
+**Review smell:** the bulk of tests mock internals; the happy-path integration test is the only place edge cases live.
+
+**Tests:** core unit tests — no mocks. Full-flow — real DB, mock only external contracts (Mox / Bypass / test `Layer`), `expect` allowed there.
 
 ---
 
