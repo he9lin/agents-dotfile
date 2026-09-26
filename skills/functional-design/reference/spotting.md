@@ -170,21 +170,22 @@ Combinator vocabulary that keeps showing up: `++` / `andThen` (sequence), `&&` (
 
 **Look for:** a parser that does I/O; a schedule that sends HTTP; a filter that writes to the DB.
 
-**Fix:** keep each domain pure; interpret both into an effect type (`Promise` / `IO` / `ZIO` / `Effect`) **last**, at the boundary. Crossing contexts with the same type is a DDD boundary miss.
+**Fix:** keep each domain pure; interpret both into an effect type (`Promise` / `IO` / `ZIO` / `Effect`) in the service, and keep concrete I/O in adapters. Crossing contexts with the same type is a DDD boundary miss.
 
 ---
 
-## Functional core vs shell (and tests)
+## Functional core vs imperative shell (and tests)
 
 Not a domain of its own — a split every candidate must have. Full rules: `functional-core.md`.
 
-**Look for:** core functions taking `repo` / `gateway` / five collaborators; `Repo`, `Logger`, `DateTime.utc_now/0`, HTTP, or `Effect` services inside decision logic; unit tests that are mostly `expect` / `to receive`; mocked Ecto repos used to test business rules; charging (or similar) before reserve so one function can stay "pure".
+- **Functional core** decides: values in, values or commands out. No I/O.
+- **Imperative shell** does: fetch, call the core, perform effects, persist. Inside a larger shell, the service orchestrates through interfaces and the adapter knows the concrete database, API, clock, or SDK.
 
-**Model:** core = values in, values or **commands** out. Shell = fetch, call core, interpret commands, persist.
+**Look for:** core functions taking `repo` / `gateway` / five collaborators; `Repo`, `Logger`, `DateTime.utc_now/0`, `Instant.now()`, HTTP, `Effect`, or `ZIO` inside decision logic; a core unit test that constructs a mock; a shell test that calls a real payment or SMS vendor; a shell test that mocks the core, an internal module, or `Repo`; a service field that is a concrete client or SDK; `query(sql)` ports; business rules tested only through a fake repo; charging (or similar) before reserve so one function can stay "pure".
 
-**Review smell:** the bulk of tests mock internals; the happy-path integration test is the only place edge cases live.
+**Review smell:** the bulk of tests mock internals; the happy-path integration test is the only place edge cases live; the service was stripped of effects and the plumbing is awkward.
 
-**Tests:** core unit tests — no mocks. Full-flow — real DB, mock only external contracts (Mox / Bypass / test `Layer`), `expect` allowed there.
+**Tests:** functional-core unit tests have **no mocks**. Imperative-shell tests **may mock external dependencies** (Mox, Bypass, test `Layer`) and use the real database. Fakes and a test clock for state you own. One shared contract suite for the fake and the live adapter. One smoke test.
 
 ---
 

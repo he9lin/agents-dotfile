@@ -214,13 +214,13 @@ Prefer **parse, don't validate**: convert untrusted input into the precise type 
 
 ## 8. Integrate Domains by Translation
 
-When two domains must combine, interpret each into a **common, more powerful domain** — in practice an effect domain (`ZIO` / `IO` / `Promise`). Do it **at the boundary**, last.
+When two domains must combine, interpret each into a **common, more powerful domain** — in practice an effect domain (`ZIO` / `IO` / `Promise`). Do it in the **service**, last. Concrete databases, HTTP clients, and SDKs are a further step out, in adapters. See `functional-core.md`.
 
-In the larger domain, solutions are less constrained: fewer guarantees, fewer reasoning and testing benefits. That cost is the reason to push translation as far out to the edges as possible.
+In the larger domain, solutions are less constrained: fewer guarantees, fewer reasoning and testing benefits. That cost is why the domain stays effect-free and only the adapter knows the concrete infrastructure.
 
 ```
-domain model ──interpreter──► effect domain ──► the world
-   (pure)                       (ZIO/IO)          (I/O)
+domain model ──interpreter──► service (ZIO/Effect via interfaces) ──► adapters
+   (pure)                         (orchestration)                    (concrete I/O)
 ```
 
 This is the FP counterpart of the DDD boundary rule: never cross contexts directly; convert types at the edge.
@@ -236,5 +236,5 @@ This is the FP counterpart of the DDD boundary rule: never cross contexts direct
 - [ ] Primitives are minimal and orthogonal; the rest are derived
 - [ ] Each execution concern is a separate interpreter
 - [ ] Illegal states are prevented at the strongest level the language allows
-- [ ] Effects live only at the boundary (shell); core takes values, not services
-- [ ] Core unit tests have no mocks; full-flow tests mock only external contracts
+- [ ] Functional core takes values, not services. The imperative shell fetches, calls the core, and performs effects. Inside the shell, the service uses interfaces and adapters own concrete I/O
+- [ ] Functional-core unit tests have no mocks. Imperative-shell tests may mock external dependencies only, and use the real database. Fakes share a contract suite with the live adapter
