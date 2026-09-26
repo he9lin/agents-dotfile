@@ -52,6 +52,7 @@
 
 ## Git Worktrees (Mandatory)
 
+- **Never implement, commit, or push on `master`/`main`.** Every change starts on a new branch in a new worktree.
 - Planning may stay in the parent repo. **Always create a git worktree before ANY implementation.** No exceptions.
 - Consent is **pre-given** — do NOT ask. Create it with native `git worktree`, then `move_agent_to_root` into it before editing.
 - Skip creation if already in a linked worktree.
