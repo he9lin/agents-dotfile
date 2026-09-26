@@ -1,6 +1,6 @@
 ---
 name: functional-design
-description: Hunt for places to apply functional design while planning or reviewing a feature, project, or codebase. Use when planning a subsystem or internal DSL; modeling a domain with types; reviewing for ADTs, combinators, composability, orthogonality, and interpreters; or designing tests (functional core, imperative shell, mock-minimal unit tests). Trigger on retry/schedules, parsers, validators/filters/rules, streams/ETL, polling/workers, state machines, workflows, Mox/expect in unit tests, core functions taking services, DateTime.Now or Repo in domain logic, or duplicated run-vs-explain logic. Covers TypeScript, Elixir, Effect, Rust, and F#.
+description: Hunt for places to apply functional design while planning or reviewing a feature, project, or codebase. Use when planning a subsystem or internal DSL; modeling a domain with types; reviewing for ADTs, combinators, composability, orthogonality, and interpreters; or designing tests (functional core, imperative shell, effects at the edges). Trigger on retry/schedules, parsers, validators/filters/rules, streams/ETL, polling/workers, state machines, workflows, Mox/expect in unit tests, core functions taking services, DateTime.Now or Repo in domain logic, ZIO/Effect in domain signatures, concrete DB or SDK clients in services, mocks inside functional-core unit tests, or duplicated run-vs-explain logic. Covers TypeScript, Elixir, Effect, ZIO, Rust, and F#. Functional-core unit tests use no mocks. The imperative shell may mock external dependencies.
 ---
 
 # Functional Design
@@ -29,18 +29,28 @@ Your global rules ("make illegal states unrepresentable", ADT modeling, translat
 
 ## Functional core, imperative shell
 
-Separate **deciding** from **doing**. Full rules: `reference/functional-core.md` (Elixir and TypeScript/Effect).
+Separate **deciding** from **doing**. Full rules: `reference/functional-core.md` (ZIO, Effect-TS, Elixir).
 
-- The **core** decides: pure functions that take data and return data. No I/O, no DB, no HTTP, no clock, no randomness, no process messaging, no logging.
-- The **shell** does: fetches inputs, calls the core, performs the effects the core asked for, persists results.
-- Core functions receive **states and results**, never collaborators that can perform effects. If a function needs to "call something" to decide, split it: the shell performs the call, then passes the result into the next pure step.
-- When effects and decisions interleave, do **not** fetch every effect result up front if that changes ordering (e.g. charge before reserve). Split into pure steps with the shell in between, or (preferred for multi-effect flows) **return commands as data** and let the shell interpret them.
-- In Effect-TS, keep decision logic in plain functions returning data; use `Effect` only in the shell; model external systems as `Context.Tag` services via `Layer`.
-- Every external system sits behind an **explicit contract** (`@behaviour` or Effect service). Your own database is **not** an external boundary for testing.
+- The **functional core** decides. Pure functions take data and return data or commands. No I/O, no database, no HTTP, no clock, no randomness, no process messaging, no logging, no effect type in the signature. Pass `now` and ids in. If the core needs another fact mid-decision, the shell fetches it or the core returns a command (`NeedCustomerTier`) and the shell feeds the result back.
+- The **imperative shell** does. It fetches inputs, calls the core, performs the effects the core asked for, and persists results. It is the only place that talks to databases, HTTP, clocks, and SDKs.
 
-**Unit tests** target the core and use **no mocks**: construct data, call the function, assert on output (including emitted commands). If a unit test seems to need a mock, the code is not pure yet — refactor instead of mocking.
+**Unit tests of the functional core use no mocks.** Construct data, call the function, assert on the output, including emitted commands. No stubs, no `expect` / `to receive`, no test doubles. If a core unit test seems to need a mock, the code is not pure yet — move the I/O to the shell instead of mocking.
 
-**Full-flow / integration tests** exercise the public entry point. Use the real DB. Mock only external boundaries (Mox, Bypass, test `Layer`), including `expect`-style call assertions. Keep these few: happy path plus one test per distinct failure-handling path. Mocks are **nouns, not verbs** — every mock implements an explicit contract. Never mock internal modules, structs, pure functions, or the repo.
+**The imperative shell may mock external dependencies.** Payment, SMS, email, third-party HTTP, and other systems outside your process are mocked through an explicit contract (`@behaviour` + Mox, Bypass, or a test `Layer`), including `expect`-style assertions when that call is what you are checking. Use the real database. Never mock the core, internal modules, pure functions, or your own repo to test business rules. Mocks are **nouns, not verbs**: every mock implements a contract.
+
+When effects and decisions interleave, do **not** fetch every result up front if that changes ordering (charge before reserve). Split pure steps with the shell in between, or return commands and let the shell interpret them.
+
+Inside a larger shell, keep three rings. "Push effects to the edges" means **only the adapter knows concretely that a database, API, clock, or SDK exists.** The service may sequence effects through interfaces. A `ZIO` or `Effect` value is referentially transparent until run; a domain function that returns one is still shell, not core.
+
+| Ring | Part of | Does | Tested with |
+|---|---|---|---|
+| **Domain** | Functional core | Rules and decisions. No effect type in the signature | Unit tests. **No mocks** |
+| **Service** | Imperative shell | Fetch → pure decide → persist, via interfaces | In-memory fakes of your ports, `TestClock`. Assert on state. Mock external dependencies here when a full-flow test is the right tool |
+| **Adapters** | Imperative shell | Live DB, HTTP, SDKs, `main` | Real or recorded I/O. Mock only external dependencies, through a port you own |
+
+Services depend on narrow, domain-shaped ports (`findDueReminders(date)`, not `query(sql)`). Wrap a vendor SDK in a port, then mock or fake that port — that is the external dependency. Concrete clients appear only in live layers (`provide` / `Layer` / config). Fakes and live adapters share a contract suite.
+
+**Ratio.** Many core unit tests (no mocks) > moderate shell tests > a handful of adapter tests > one smoke test.
 
 ## Hunt first (required in both modes)
 
@@ -50,7 +60,7 @@ Do not skip this scan. Do not assume the whole app is one domain. Do not force a
 
 For every candidate (and every skip), produce the fields in [Output](#output). Use the catalog in `reference/spotting.md` as the hunt list. Typical hits: **scheduler**, **parser**, **validator/filter/rules**, **stream/pipeline**, **polling/worker with time**, **lifecycle ADT**, **optics**, **formula**, **workflow**.
 
-**Look-for (code and specs):** `retry`, backoff, cron, `setTimeout` chains; regex / `split` / hand-rolled grammars; `if` trees for "match this AND that"; `InputStream` / file concat / ETL steps; `DateTime.Now` / `DateTime.utc_now/0` / `new Date()` inside business logic; stringly status flags (`"ready"|"received"|...` as `string` or booleans that can contradict); methods that return `void` and mutate; the same rule implemented once to run and again to explain or serialize; core functions taking `repo` / `gateway` / five collaborators; `Repo` / `Logger` / HTTP / `Effect` services inside core; unit tests that are mostly `expect(...).to receive`; mocked Ecto repos used to test business rules.
+**Look-for (code and specs):** `retry`, backoff, cron, `setTimeout` chains; regex / `split` / hand-rolled grammars; `if` trees for "match this AND that"; `InputStream` / file concat / ETL steps; `DateTime.Now` / `DateTime.utc_now/0` / `new Date()` / `Instant.now()` inside business logic; stringly status flags (`"ready"|"received"|...` as `string` or booleans that can contradict); methods that return `void` and mutate; the same rule implemented once to run and again to explain or serialize; core functions taking `repo` / `gateway` / five collaborators; `Repo` / `Logger` / HTTP / `Effect` / `ZIO` inside the domain; a service holding a concrete HTTP, DB, or SDK client; `query(sql)` ports; unit tests that are mostly `expect(...).to receive` or "save was called once"; vendor SDK mocks; business rules tested only through a fake repo.
 
 ## Choose the encodings
 
@@ -87,16 +97,16 @@ Complete every step. Do not approve a plan without the hunt output and, for each
 3. **Choose the encodings** (tables above) and state why.
 4. **List primitives** — constructors + operators (combinators). Every operator takes the domain type in and returns the domain type out. Tag primitive vs derived; demote anything expressible in terms of others.
 5. **Test the primitives** — composable, expressive, orthogonal (no overlaps) → minimal. Check that real business sentences become composition (`primary.orElse(fragments).buffered`, `exponential.andThen(fixed)`, `username + char('@') + server`).
-6. **Plan interpreters** — each execution concern (`run`, `describe`, `validate`, `preview`, `toJson`) as its own total function over the model. Effects (`DateTime.Now`, I/O) live only here. Multi-effect flows: core returns commands; the shell is the interpreter.
+6. **Plan interpreters** — each execution concern (`run`, `describe`, `validate`, `preview`, `toJson`) as its own total function over the model. Effectful interpreters live in the service and depend on interfaces; concrete I/O stays in adapters. Multi-effect flows: the domain returns commands; the service interprets them.
 7. **Constrain with types** — encode which operations are legal, at the strongest level the language allows.
-8. **Put effects at the boundary** — the shell fetches, calls the core, performs commanded effects, persists. Translate into the effect domain (`ZIO` / `IO` / `Promise` / `Effect`) last. Preserve effect order (see `reference/functional-core.md` §3).
-9. **Plan tests** — bulk of cases (all edges and errors) as core unit tests with **no mocks**. Few full-flow tests through the public entry point: real DB, mocks only at external contracts, `expect` allowed there. Follow `reference/functional-core.md` §5–7.
+8. **Put effects at the boundary** — service sandwich: fetch → pure decide → persist. The service depends on interfaces; concrete I/O is only in adapters (`provide` / `Layer`). Translate into the effect domain (`ZIO` / `IO` / `Promise` / `Effect`) in the service, not the domain. Preserve effect order (see `reference/functional-core.md` §5).
+9. **Plan tests** — functional-core unit tests with **no mocks**. Imperative-shell tests may mock external dependencies (Mox, Bypass, test `Layer`), use the real database, and must not mock the core or the repo to test rules. Inside the shell, prefer in-memory fakes and a test clock when asserting on state you own. A handful of adapter integration tests. One smoke test. Fakes and live adapters share a contract suite. Follow `reference/functional-core.md` §7–9.
 
 ## Review Mode
 
 Scan in two passes. Report every finding with **name, severity, location, and fix**.
 
-**Pass A — missed domains.** Walk `reference/spotting.md` and `reference/functional-core.md`. For each hit, if the code is a class/service/loop instead of model + constructors + combinators + interpreter, or if business logic lives in the shell and is only tested with mocks, report **Missed domain** (not a style nit). Propose the type, constructors, combinators, interpreters, and the core/shell/test split.
+**Pass A — missed domains.** Walk `reference/spotting.md` and `reference/functional-core.md`. For each hit, if the code is a class/service/loop instead of model + constructors + combinators + interpreter, or if business logic lives in the service and is only tested with mocks, report **Missed domain** (not a style nit). Propose the type, constructors, combinators, interpreters, and the domain/service/adapter split.
 
 **Pass B — malformed domains.** If a functional domain already exists (or should), scan for named violations:
 
@@ -109,10 +119,17 @@ Scan in two passes. Report every finding with **name, severity, location, and fi
 | Runtime check types could own | `throw` on a forbidden state | type-level constraint |
 | Opaque AST node | function embedded in a data model | keep models pure data |
 | Overlapping primitives | two primitives do the same job | keep one, derive the other |
-| Effect in domain logic | I/O, clock, `Repo`, `Logger`, or `Effect` inside the core | move to shell / interpreter; pass time and IDs as values |
-| Core takes services | function args are `repo`, `gateway`, or a pile of collaborators | pass states and results; shell does the calls |
-| Mocked unit test | unit test is `expect` / `to receive` on internals | purify the core; assert input → output |
-| Mocked database | business logic tested against a fake repo | use real Postgres; put logic in the core |
+| Effect in domain logic | I/O, clock, `Repo`, `Logger`, `Effect`, or `ZIO` inside the core, including an effect type in the signature | move orchestration to the service; pass time and IDs as values; return data or commands |
+| Core takes services | function args are `repo`, `gateway`, or a pile of collaborators | pass states and results; service does the calls |
+| Concrete client in the service | service holds an HTTP client, pool, or SDK | depend on a trait; provide the live impl at the edge |
+| Wide port | `query(sql)` or a pass-through of a vendor SDK | domain-shaped methods (`findDueReminders(date)`) |
+| Mocked unit test | a functional-core unit test uses a mock, stub, or `expect` / `to receive` | purify the core; assert input → output. No mocks in core unit tests |
+| Unmocked external dependency | a shell test calls a real payment, SMS, or third-party API | mock that external dependency through its contract (Mox, Bypass, test `Layer`) |
+| Call-count test | assert "`save` called once with X" | fake and assert resulting state, unless the call itself is the requirement |
+| Mocked database | business rules tested only through a fake or mocked repo | move the rules to the domain; fake the port only for service orchestration; hit real Postgres in adapter tests |
+| Vendor SDK mocked directly | tests mock Stripe, Twilio, Google, or similar | wrap it in a narrow trait you own; fake that |
+| Fake drifted from live | in-memory port never run against the live adapter | one shared contract suite for both |
+| Services banned from I/O | plumbing exists only so the service stays effect-free | services may sequence effects through interfaces; only concrete I/O is edge-only |
 | Reordered effects for purity | charge-then-reserve (or similar) so one function can stay "pure" | split steps or return commands; keep order |
 | Non-exhaustive interpreter | wildcard default hides cases | total match, no catch-all |
 | Leaky combinator | mutation or loop visible in the API | keep mutation inside; same declarative signature |
@@ -131,9 +148,9 @@ For each:
 - Evidence (what combinable solutions exist)
 - Model / constructors / combinators (sketch)
 - Encoding (model + combinator) and why
-- Interpreters (`run`, `describe`, commands the shell executes)
-- Core vs shell split; values in, commands out
-- Tests: core unit (no mocks) vs full-flow (real DB, mock externals only)
+- Interpreters (`run`, `describe`, commands the service executes)
+- Domain / service / adapter split; values in, commands out
+- Tests: functional-core unit tests with no mocks; imperative shell may mock external dependencies only; real DB; fakes for state you own; shared contract suite; one smoke test
 - Severity if review: missed vs malformed
 
 ## Skip
@@ -153,14 +170,20 @@ Only for candidates you keep. Planning: design outputs 1–9. Review: violation 
 - Validating with `if`/`throw` what a type could forbid
 - Executing inside the model instead of writing an interpreter
 - Exposing a mutable/loop implementation as the combinator's public contract
-- Passing services into the core instead of values the shell already fetched
-- A unit test that needs a mock — the design is wrong, not the test
-- Mocking the database to test business logic
+- Passing services into the core instead of values the service already fetched
+- Reading "push effects to the edges" as "the service may not do I/O"
+- Treating a `ZIO` / `Effect` program as an effect-free core because the value is referentially transparent until run
+- A functional-core unit test that needs a mock — the design is wrong, not the test
+- Mocking the core, an internal module, or your own database from the shell
+- Refusing to mock an external dependency in a shell test and hitting the real vendor instead
+- Asserting call counts for an effect that shows up as state
+- Mocking a vendor SDK instead of a port you own
+- Testing business rules only through a fake repo
 - Changing effect ordering so the code "looks pure"
 
 ## Reference
 
 - `reference/spotting.md` — where to look (scheduler, parser, validator, stream, …)
-- `reference/functional-core.md` — functional core, imperative shell, mock-minimal testing
+- `reference/functional-core.md` — effects at the edges: three rings, sandwich, fakes, contract tests
 - `reference/patterns.md` — patterns with code templates
 - `reference/language-mapping.md` — TypeScript / Elixir / Rust / F# mappings

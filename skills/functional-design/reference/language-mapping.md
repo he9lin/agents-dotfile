@@ -170,3 +170,15 @@ type PromotionId = PromotionId of string
 | Declarative encoding | union + interpreter | tuple struct + interpreter | `enum` + `match` | DU + `match` |
 | Error as data | `Result<T, E>` union | `{:ok, v}` / `{:error, e}` | `Result<T, E>` | `Result<Ok, Err>` |
 | Compose | `|>`-less, named/method | `\|>` pipes | method chaining | `\|>` pipes |
+
+---
+
+## Effect systems
+
+Layering for ZIO, Effect-TS, and Elixir is in `functional-core.md`, not in the ADT tables above. The domain stays a plain function. The service sequences `ZIO` / `Effect` / a context function and names dependencies as interfaces. The adapter is the live `ZLayer`, Effect `Layer`, or config-selected impl.
+
+| Ring | ZIO | Effect-TS | Elixir |
+|---|---|---|---|
+| Domain | plain function, `Either` | plain function | module with no `Repo` |
+| Service | traits in `R` | `Context.Tag` | `@behaviour` |
+| Adapter | `ZLayer` + `provide` | `Layer` | `Repo`, HTTP client, config |
