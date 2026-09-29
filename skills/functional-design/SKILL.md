@@ -1,6 +1,6 @@
 ---
 name: functional-design
-description: Hunt for places to apply functional design while planning or reviewing a feature, project, or codebase. Use when planning a subsystem or internal DSL; modeling a domain with types; reviewing for ADTs, combinators, composability, orthogonality, and interpreters; or designing tests (functional core, imperative shell, effects at the edges). Trigger on retry/schedules, parsers, validators/filters/rules, streams/ETL, polling/workers, state machines, workflows, Mox/expect in unit tests, core functions taking services, DateTime.Now or Repo in domain logic, ZIO/Effect in domain signatures, concrete DB or SDK clients in services, mocks inside functional-core unit tests, or duplicated run-vs-explain logic. Covers TypeScript, Elixir, Effect, ZIO, Rust, and F#. Functional-core unit tests use no mocks. The imperative shell may mock external dependencies.
+description: Hunt for places to apply functional design while planning or reviewing a feature, project, or codebase. Use when planning a subsystem or internal DSL; modeling a domain with types; reviewing for ADTs, combinators, composability, orthogonality, and interpreters; or designing tests (functional core, imperative shell, effects at the edges). Trigger on retry/schedules, parsers, validators/filters/rules, streams/ETL, polling/workers, state machines, workflows, Mox/expect in unit tests, core functions taking services, DateTime.Now or Repo in domain logic, ZIO/Effect in domain signatures, concrete DB or SDK clients in services, mocks inside functional-core unit tests, duplicated run-vs-explain logic, business rules inside I/O and external-API branches, or real-world data left as raw string/number or as a status plus optional fields. Covers TypeScript, Elixir, Effect, ZIO, Rust, and F#. Functional-core unit tests use no mocks. The imperative shell may mock external dependencies. Effect edges only make dumb decisions by matching a pure choice; split a layer cake of alternating I/O and logic into mini-workflows.
 ---
 
 # Functional Design
@@ -21,31 +21,33 @@ That is also an **abstract data type**: a type plus the operations that construc
 
 | Part | Role | Lives as |
 |---|---|---|
-| **Models** | immutable data describing solutions | sum + product types |
+| **Models** | immutable data describing solutions, and real-world values | single-case wrapper, discriminated union (OR; cases may carry data), or record (AND) |
 | **Constructors** | build solutions to simple problems | module / factory / companion functions |
 | **Operators / combinators** | transform & combine solutions | functions on the model type |
 
 Your global rules ("make illegal states unrepresentable", ADT modeling, translate at boundaries) are the **constitution**; this skill is the **playbook**.
 
+Real-world data follows the same rule, even when it is a noun and not a combinator DSL. Always model it as an abstract data type or a discriminated union: a single-case wrapper (`CheckNumber of int`, `PaymentAmount of decimal`), an OR whose cases may carry data (`Cash | Check of CheckNumber | Card of CreditCardInfo`), or an AND record built only from those types (`Payment` is amount and currency and method). A raw `string` / `number` / `decimal`, or a status string plus optional fields, is not a domain type. See `reference/patterns.md` §1, "Real-world data".
+
 ## Functional core, imperative shell
 
 Separate **deciding** from **doing**. Full rules: `reference/functional-core.md` (ZIO, Effect-TS, Elixir).
 
-- The **functional core** decides. Pure functions take data and return data or commands. No I/O, no database, no HTTP, no clock, no randomness, no process messaging, no logging, no effect type in the signature. Pass `now` and ids in. If the core needs another fact mid-decision, the shell fetches it or the core returns a command (`NeedCustomerTier`) and the shell feeds the result back.
-- The **imperative shell** does. It fetches inputs, calls the core, performs the effects the core asked for, and persists results. It is the only place that talks to databases, HTTP, clocks, and SDKs.
+- The **functional core** decides. Pure functions take data and return data or commands. No I/O, no database, no HTTP, no clock, no randomness, no process messaging, no logging, no effect type in the signature. Pass `now` and ids in. If the core needs another fact mid-decision, the shell fetches it or the core returns a command (`NeedCustomerTier`) and the shell feeds the result back. Thresholds, status changes, and "should we call this API?" all live here.
+- The **imperative shell** does. It fetches inputs, calls the core, performs the effects the core asked for, and persists results. It is the only place that talks to databases, HTTP, clocks, and SDKs. Anything that evolves an effect — I/O or an external API — makes only a **dumb decision** from the pure result: match the choice (`FullyPaid` → mark paid and post the event, `PartiallyPaid` → save the invoice, `NoActionNeeded` → do nothing) and carry it out. A business rule inside that branch has leaked out of the core. Full rule: `reference/functional-core.md` §3a.
 
 **Unit tests of the functional core use no mocks.** Construct data, call the function, assert on the output, including emitted commands. No stubs, no `expect` / `to receive`, no test doubles. If a core unit test seems to need a mock, the code is not pure yet — move the I/O to the shell instead of mocking.
 
 **The imperative shell may mock external dependencies.** Payment, SMS, email, third-party HTTP, and other systems outside your process are mocked through an explicit contract (`@behaviour` + Mox, Bypass, or a test `Layer`), including `expect`-style assertions when that call is what you are checking. Use the real database. Never mock the core, internal modules, pure functions, or your own repo to test business rules. Mocks are **nouns, not verbs**: every mock implements a contract.
 
-When effects and decisions interleave, do **not** fetch every result up front if that changes ordering (charge before reserve). Split pure steps with the shell in between, or return commands and let the shell interpret them.
+When effects and decisions interleave, do **not** fetch every result up front if that changes ordering (charge before reserve). Split pure steps with the shell in between, or return commands and let the shell interpret them. Each effect step stays dumb dispatch. One workflow is one sandwich (fetch → pure decide → dispatch). If I/O and pure steps alternate until the function is a layer cake, split it into shorter mini-workflows so each stays a small sandwich (`reference/functional-core.md` §5).
 
 Inside a larger shell, keep three rings. "Push effects to the edges" means **only the adapter knows concretely that a database, API, clock, or SDK exists.** The service may sequence effects through interfaces. A `ZIO` or `Effect` value is referentially transparent until run; a domain function that returns one is still shell, not core.
 
 | Ring | Part of | Does | Tested with |
 |---|---|---|---|
 | **Domain** | Functional core | Rules and decisions. No effect type in the signature | Unit tests. **No mocks** |
-| **Service** | Imperative shell | Fetch → pure decide → persist, via interfaces | In-memory fakes of your ports, `TestClock`. Assert on state. Mock external dependencies here when a full-flow test is the right tool |
+| **Service** | Imperative shell | Fetch → pure decide → dumb dispatch, via interfaces | In-memory fakes of your ports, `TestClock`. Assert on state. Mock external dependencies here when a full-flow test is the right tool |
 | **Adapters** | Imperative shell | Live DB, HTTP, SDKs, `main` | Real or recorded I/O. Mock only external dependencies, through a port you own |
 
 Services depend on narrow, domain-shaped ports (`findDueReminders(date)`, not `query(sql)`). Wrap a vendor SDK in a port, then mock or fake that port — that is the external dependency. Concrete clients appear only in live layers (`provide` / `Layer` / config). Fakes and live adapters share a contract suite.
@@ -60,7 +62,7 @@ Do not skip this scan. Do not assume the whole app is one domain. Do not force a
 
 For every candidate (and every skip), produce the fields in [Output](#output). Use the catalog in `reference/spotting.md` as the hunt list. Typical hits: **scheduler**, **parser**, **validator/filter/rules**, **stream/pipeline**, **polling/worker with time**, **lifecycle ADT**, **optics**, **formula**, **workflow**.
 
-**Look-for (code and specs):** `retry`, backoff, cron, `setTimeout` chains; regex / `split` / hand-rolled grammars; `if` trees for "match this AND that"; `InputStream` / file concat / ETL steps; `DateTime.Now` / `DateTime.utc_now/0` / `new Date()` / `Instant.now()` inside business logic; stringly status flags (`"ready"|"received"|...` as `string` or booleans that can contradict); methods that return `void` and mutate; the same rule implemented once to run and again to explain or serialize; core functions taking `repo` / `gateway` / five collaborators; `Repo` / `Logger` / HTTP / `Effect` / `ZIO` inside the domain; a service holding a concrete HTTP, DB, or SDK client; `query(sql)` ports; unit tests that are mostly `expect(...).to receive` or "save was called once"; vendor SDK mocks; business rules tested only through a fake repo.
+**Look-for (code and specs):** `retry`, backoff, cron, `setTimeout` chains; regex / `split` / hand-rolled grammars; `if` trees for "match this AND that"; `InputStream` / file concat / ETL steps; `DateTime.Now` / `DateTime.utc_now/0` / `new Date()` / `Instant.now()` inside business logic; stringly status flags (`"ready"|"received"|...` as `string` or booleans that can contradict); methods that return `void` and mutate; the same rule implemented once to run and again to explain or serialize; core functions taking `repo` / `gateway` / five collaborators; `Repo` / `Logger` / HTTP / `Effect` / `ZIO` inside the domain; a business `if` after the pure call, inside the branch that writes to the DB or calls an external API; one handler that alternates I/O and pure steps (a layer cake); a service holding a concrete HTTP, DB, or SDK client; `query(sql)` ports; unit tests that are mostly `expect(...).to receive` or "save was called once"; vendor SDK mocks; business rules tested only through a fake repo.
 
 ## Choose the encodings
 
@@ -93,13 +95,13 @@ Complete every step. Do not approve a plan without the hunt output and, for each
 
 0. **Hunt** — scan spec + existing code with `reference/spotting.md`. List candidates and skips.
 1. **Name the domain** and the problems it solves.
-2. **Sketch the model** — sum types for alternatives, product types for composites; no raw primitives for domain concepts. Encapsulate behavior in the type when the "thing" is a policy, grammar, pipeline, or program — not only when it is a noun.
+2. **Sketch the model** — every real-world concept is a wrapper (distinct value), a discriminated union (OR; cases may carry data), or a record (AND) of those types. No raw primitives, no status string plus optional fields. Sum types for alternatives, product types for composites. Encapsulate behavior in the type when the "thing" is a policy, grammar, pipeline, or program — not only when it is a noun. See `reference/patterns.md`, "Real-world data".
 3. **Choose the encodings** (tables above) and state why.
 4. **List primitives** — constructors + operators (combinators). Every operator takes the domain type in and returns the domain type out. Tag primitive vs derived; demote anything expressible in terms of others.
 5. **Test the primitives** — composable, expressive, orthogonal (no overlaps) → minimal. Check that real business sentences become composition (`primary.orElse(fragments).buffered`, `exponential.andThen(fixed)`, `username + char('@') + server`).
 6. **Plan interpreters** — each execution concern (`run`, `describe`, `validate`, `preview`, `toJson`) as its own total function over the model. Effectful interpreters live in the service and depend on interfaces; concrete I/O stays in adapters. Multi-effect flows: the domain returns commands; the service interprets them.
 7. **Constrain with types** — encode which operations are legal, at the strongest level the language allows.
-8. **Put effects at the boundary** — service sandwich: fetch → pure decide → persist. The service depends on interfaces; concrete I/O is only in adapters (`provide` / `Layer`). Translate into the effect domain (`ZIO` / `IO` / `Promise` / `Effect`) in the service, not the domain. Preserve effect order (see `reference/functional-core.md` §5).
+8. **Put effects at the boundary** — service sandwich: fetch → pure decide → dumb dispatch. The edge matches the pure choice and performs it; domain rules stay in the core (§3a). The service depends on interfaces; concrete I/O is only in adapters (`provide` / `Layer`). Translate into the effect domain (`ZIO` / `IO` / `Promise` / `Effect`) in the service, not the domain. Preserve effect order. A layer cake of alternating I/O and logic becomes shorter mini-workflows, each one sandwich (see `reference/functional-core.md` §3a and §5).
 9. **Plan tests** — functional-core unit tests with **no mocks**. Imperative-shell tests may mock external dependencies (Mox, Bypass, test `Layer`), use the real database, and must not mock the core or the repo to test rules. Inside the shell, prefer in-memory fakes and a test clock when asserting on state you own. A handful of adapter integration tests. One smoke test. Fakes and live adapters share a contract suite. Follow `reference/functional-core.md` §7–9.
 
 ## Review Mode
@@ -112,7 +114,7 @@ Scan in two passes. Report every finding with **name, severity, location, and fi
 
 | Violation | Symptom | Fix |
 |---|---|---|
-| Primitive obsession | raw `string`/`number` for a concept | wrap in a domain type |
+| Primitive obsession | raw `string`/`number`/`decimal` for a real-world concept, or a status string plus optional fields standing in for a choice | single-case wrapper, or a discriminated union whose cases carry the data; records compose those types only |
 | Open inheritance taxonomy | class hierarchy with "don't extend both" rules | closed ADT |
 | Void operator | returns `void`/`Unit`/`nil` | return a model value |
 | God service | one class does six jobs | model + interpreters |
@@ -120,6 +122,8 @@ Scan in two passes. Report every finding with **name, severity, location, and fi
 | Opaque AST node | function embedded in a data model | keep models pure data |
 | Overlapping primitives | two primitives do the same job | keep one, derive the other |
 | Effect in domain logic | I/O, clock, `Repo`, `Logger`, `Effect`, or `ZIO` inside the core, including an effect type in the signature | move orchestration to the service; pass time and IDs as values; return data or commands |
+| Decision in the effect edge | an I/O or external-API branch contains a business rule (threshold, status check, "should we notify / charge / call?") | return a choice from the core; the branch only performs the effect |
+| Layer cake | one handler alternates many I/O and pure steps, with policy between them | split into mini-workflows; each is fetch → pure decide → dumb dispatch |
 | Core takes services | function args are `repo`, `gateway`, or a pile of collaborators | pass states and results; service does the calls |
 | Concrete client in the service | service holds an HTTP client, pool, or SDK | depend on a trait; provide the live impl at the edge |
 | Wide port | `query(sql)` or a pass-through of a vendor SDK | domain-shaped methods (`findDueReminders(date)`) |
@@ -149,7 +153,7 @@ For each:
 - Model / constructors / combinators (sketch)
 - Encoding (model + combinator) and why
 - Interpreters (`run`, `describe`, commands the service executes)
-- Domain / service / adapter split; values in, commands out
+- Domain / service / adapter split; values in, choices or commands out; effect edge is dumb dispatch
 - Tests: functional-core unit tests with no mocks; imperative shell may mock external dependencies only; real DB; fakes for state you own; shared contract suite; one smoke test
 - Severity if review: missed vs malformed
 
@@ -165,6 +169,7 @@ Only for candidates you keep. Planning: design outputs 1–9. Review: violation 
 - Jumping to services/classes before hunting for a domain
 - Treating the whole application as one DSL
 - Modeling nouns (User, Order) and skipping behavior-as-values (retry policy, filter, parser, pipeline)
+- Leaving a real-world concept as `string`/`number`/`decimal`, or as a status plus optional fields, instead of a wrapper or a discriminated union
 - Leaving either encoding choice implicit
 - Adding convenience functions as new primitives instead of deriving them
 - Validating with `if`/`throw` what a type could forbid
@@ -180,10 +185,12 @@ Only for candidates you keep. Planning: design outputs 1–9. Review: violation 
 - Mocking a vendor SDK instead of a port you own
 - Testing business rules only through a fake repo
 - Changing effect ordering so the code "looks pure"
+- Putting a business rule in the branch that performs an effect (the edge re-decides instead of matching the pure choice)
+- Letting one workflow grow into a layer cake instead of splitting it into mini-workflows
 
 ## Reference
 
 - `reference/spotting.md` — where to look (scheduler, parser, validator, stream, …)
-- `reference/functional-core.md` — effects at the edges: three rings, sandwich, fakes, contract tests
+- `reference/functional-core.md` — effects at the edges: three rings, sandwich, dumb dispatch, layer cake, fakes, contract tests
 - `reference/patterns.md` — patterns with code templates
 - `reference/language-mapping.md` — TypeScript / Elixir / Rust / F# mappings

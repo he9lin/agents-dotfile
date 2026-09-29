@@ -1,6 +1,6 @@
 ---
 name: domain-modeling
-description: Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a CONTEXT.md, or recording or editing an ADR.
+description: Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a CONTEXT.md, or recording or editing an ADR. Real-world terms are a distinct value, a choice, or a composite — never a raw primitive — and the code models them as abstract data types or discriminated unions.
 ---
 
 # Domain Modeling
@@ -48,6 +48,16 @@ When the user uses a term that conflicts with the existing language in `CONTEXT.
 ### Sharpen fuzzy language
 
 When the user uses vague or overloaded terms, propose a precise canonical term. "You're saying 'account': do you mean the Customer or the User? Those are different things."
+
+### Shape every real-world term
+
+A real-world concept is never "a string", "a number", or "a decimal", and never one bag of optional fields. When a term crystallises, say which shape it is, in the glossary's own words:
+
+- **Distinct value.** A check number, a card number, a payment amount. The code hides the primitive behind an abstract data type (a single-case union, a newtype, or a brand). Callers cannot pass a raw `int` or `string`.
+- **Choice.** Cash, or a check that has a check number, or a card that has card info. The code is a discriminated union, and cases carry that data. Not a status string, and not one record with `checkNumber?` and `card?`.
+- **Composite.** A payment is an amount and a currency and a method. The code is a record whose fields are themselves domain types.
+
+Build from the small terms up. `CONTEXT.md` states the shape in words and stays free of type syntax. The code follows with a wrapper, a discriminated union, or a record — see the functional-design skill, "Real-world data". If the code uses a raw primitive or optional fields for a choice, that is a contradiction: surface it the same way you would surface a glossary mismatch.
 
 ### Discuss concrete scenarios
 
