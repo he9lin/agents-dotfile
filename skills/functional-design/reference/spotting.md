@@ -96,6 +96,18 @@ Combinator vocabulary that keeps showing up: `++` / `andThen` (sequence), `&&` (
 
 ---
 
+## Real-world data
+
+**Problems:** money, ids, payment methods, addresses — domain nouns left as `string` / `number` / `decimal`, or as a status plus optional fields.
+
+**Look for:** `cardNumber: string`, `amount: number`, `method: "cash" | "check" | "card"` next to `checkNumber?` and `card?`.
+
+**Model:** a distinct value (single-case wrapper), a discriminated union whose cases carry data (`Cash | Check of CheckNumber | Card of CreditCardInfo`), or a record built only from those types.
+
+**Review smell:** the primitive leaks across the boundary; a new case is an extra optional field instead of a new union case. Full rule: `patterns.md`, "Real-world data".
+
+---
+
 ## Lifecycle / state machine (nouns with illegal combos)
 
 **Problems:** orders, jobs, connections, robots, polling states — flags that can contradict.
@@ -178,10 +190,10 @@ Combinator vocabulary that keeps showing up: `++` / `andThen` (sequence), `&&` (
 
 Not a domain of its own — a split every candidate must have. Full rules: `functional-core.md`.
 
-- **Functional core** decides: values in, values or commands out. No I/O.
-- **Imperative shell** does: fetch, call the core, perform effects, persist. Inside a larger shell, the service orchestrates through interfaces and the adapter knows the concrete database, API, clock, or SDK.
+- **Functional core** decides: values in, values or commands out. No I/O. Every domain rule lives here.
+- **Imperative shell** does: fetch, call the core, perform effects, persist. Anything that evolves an effect (I/O, an external API) only matches the pure choice and carries it out — dumb dispatch, no second decision. Inside a larger shell, the service orchestrates through interfaces and the adapter knows the concrete database, API, clock, or SDK. One workflow is one sandwich; a layer cake splits into mini-workflows. Full rule: `functional-core.md` §3a and §5.
 
-**Look for:** core functions taking `repo` / `gateway` / five collaborators; `Repo`, `Logger`, `DateTime.utc_now/0`, `Instant.now()`, HTTP, `Effect`, or `ZIO` inside decision logic; a core unit test that constructs a mock; a shell test that calls a real payment or SMS vendor; a shell test that mocks the core, an internal module, or `Repo`; a service field that is a concrete client or SDK; `query(sql)` ports; business rules tested only through a fake repo; charging (or similar) before reserve so one function can stay "pure".
+**Look for:** core functions taking `repo` / `gateway` / five collaborators; `Repo`, `Logger`, `DateTime.utc_now/0`, `Instant.now()`, HTTP, `Effect`, or `ZIO` inside decision logic; a business `if` inside the handler after the pure call (threshold, status, "should we email / charge / call this API?"); a pattern-match branch on an effect edge that does more than perform the choice; one function that alternates I/O and pure steps until it is a layer cake; a core unit test that constructs a mock; a shell test that calls a real payment or SMS vendor; a shell test that mocks the core, an internal module, or `Repo`; a service field that is a concrete client or SDK; `query(sql)` ports; business rules tested only through a fake repo; charging (or similar) before reserve so one function can stay "pure".
 
 **Review smell:** the bulk of tests mock internals; the happy-path integration test is the only place edge cases live; the service was stripped of effects and the plumbing is awkward.
 

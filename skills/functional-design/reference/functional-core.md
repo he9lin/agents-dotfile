@@ -6,8 +6,8 @@ Reference for functional design reviews. Applies to ZIO (Scala), Effect-TS, Elix
 
 Separate **deciding** from **doing**.
 
-- The **functional core** decides: pure functions, data in, data or commands out. No I/O, no database, no HTTP, no clock, no randomness, no logging, no effect type in the signature.
-- The **imperative shell** does: fetch inputs, call the core, perform commanded effects, persist results. It is the only code that knows about databases, HTTP, clocks, and SDKs.
+- The **functional core** decides: pure functions, data in, data or commands out. No I/O, no database, no HTTP, no clock, no randomness, no logging, no effect type in the signature. Every domain rule lives here — thresholds, status changes, "should we notify?", which API call to make.
+- The **imperative shell** does: fetch inputs, call the core, perform commanded effects, persist results. It is the only code that knows about databases, HTTP, clocks, and SDKs. Code that performs an effect makes only a **dumb decision**: it matches the core's result and carries that choice out. It does not re-decide.
 
 **Unit tests of the functional core use no mocks.** Construct values, call the function, assert on the result. If the test needs a mock, I/O has leaked into the core.
 
@@ -25,12 +25,14 @@ It means: **only the edge knows concretely that a database, API, clock, or SDK e
 
 Older notes call the outside the **shell**. That shell is two rings: the **service** (orchestration) and the **adapters** (concrete I/O). The **domain** is the core. Services may sequence effects. Banning I/O from the service produces awkward plumbing; that misreading is a defect, not a stricter design.
 
+Pushing the effect out is only half the rule. The code that performs it — service or adapter — does not contain the domain decision. It dispatches on the core's choice (§3a).
+
 ## 2. The three rings
 
 | Ring | Contains | Effects? | Knows about infrastructure? | Tested with |
 |---|---|---|---|---|
 | **Domain (pure core)** | Rules, validation, state transitions, decisions | None. No `ZIO` / `Effect` / `Task` in signatures | No | Plain unit tests, property tests |
-| **Service (orchestration)** | Use cases: fetch → decide → persist | Yes, sequenced | Only via interfaces (`trait ApptRepo`, `Context.Tag`, Elixir `@behaviour`) in the environment | In-memory fakes, `TestClock` / `TestRandom` |
+| **Service (orchestration)** | Use cases: fetch → pure decide → dumb dispatch | Yes, sequenced | Only via interfaces (`trait ApptRepo`, `Context.Tag`, Elixir `@behaviour`) in the environment | In-memory fakes, `TestClock` / `TestRandom` |
 | **Adapters / edge** | Live layers: DB pool, HTTP clients, SDKs, `main` | Yes, real I/O | Yes, concretely | Integration tests (Testcontainers, Ecto SQL Sandbox, recorded HTTP) |
 
 | Ring | ZIO | Effect-TS | Elixir |
@@ -41,7 +43,7 @@ Older notes call the outside the **shell**. That shell is two rings: the **servi
 
 ## 3. Service shape: the sandwich
 
-Fetch (effect) → decide (pure) → persist/notify (effect).
+Fetch (effect) → decide (pure) → dumb dispatch (effect).
 
 ```scala
 def reschedule(id: ApptId, t: Instant) =
@@ -54,7 +56,7 @@ def reschedule(id: ApptId, t: Instant) =
   } yield next
 ```
 
-`Appt.reschedule` never sees a repo, clock, or effect type. The service passes it data, including "now," and it returns a new value plus events or commands describing what should happen.
+`Appt.reschedule` never sees a repo, clock, or effect type. The service passes it data, including "now," and it returns a new value plus events or commands describing what should happen. Saving `next` and sending `next.events` are dumb: the service does not inspect the appointment and decide whether to notify.
 
 Same shape in Elixir. `DateTime.utc_now/0` stays in the service; the domain receives `now`:
 
@@ -70,6 +72,34 @@ def reschedule(id, new_time) do
 end
 ```
 
+## 3a. Dumb dispatch at the effect edge
+
+Push every domain decision into the core. Anything that evolves an effect — a database write, an event post, an HTTP call, an external API — makes only a dumb decision from the pure result. It matches a choice the core already returned and performs the corresponding effect. It does not ask a new business question.
+
+Two legal shapes:
+
+1. **Uniform.** The core returns the new state plus events or commands. The edge saves the state and runs each command. No branch inspects business data. The reschedule sandwich above is this shape.
+2. **Choice match.** The core returns a closed sum. The edge has one branch per case. Each branch is a straight-line effect, or nothing.
+
+```elixir
+def pay_invoice(command) do
+  unpaid = Invoices.load_unpaid!(command.invoice_id)
+
+  case Invoice.apply_payment(unpaid, command.payment) do
+    :fully_paid ->
+      Invoices.mark_fully_paid!(command.invoice_id)
+      Events.post_invoice_paid!(command.invoice_id)
+
+    {:partially_paid, updated} ->
+      Invoices.update!(updated)
+  end
+end
+```
+
+`Invoice.apply_payment` decides fully versus partially paid. The handler does not re-check the amount, the status, or a threshold. A branch that asks "is this too large?", "should we notify?", or "is the customer overdue?" is a domain rule sitting on the effect edge. Move that rule into the core and return another choice (`:overdue_warning_needed` or `:no_action_needed`). The edge then sends the message, or does nothing.
+
+The same rule covers every effect, not only the database. The core names the effect as data (`Charge(amount, card)`, `SendWarning(customerId)`). The edge performs that effect. When a later pure step needs the outcome (a charge id, the row just written), the edge passes that outcome back in as data. It does not invent the next business step.
+
 ## 4. Design practices
 
 1. **Pass data into the core, not dependencies.** If a domain function takes a repo, client, or effect, it is not core.
@@ -83,7 +113,7 @@ end
    ```
 
 2. **Inject time, IDs, and randomness as inputs** (`now: Instant`, `newId: ApptId`). Never call `Instant.now()`, `DateTime.utc_now/0`, `new Date()`, UUID generators, or random inside the core.
-3. **Return decisions, don't perform them.** The core returns values, `List[Event]`, or commands like `SendSms(to, msg)`. The service executes them.
+3. **Return decisions, don't perform them.** The core returns values, `List[Event]`, or commands like `SendSms(to, msg)`, or a choice such as `:fully_paid | {:partially_paid, invoice}`. The edge matches that result and performs it. Branches stay dumb (§3a).
 4. **When the core needs data mid-decision,** fetch it first in the service, or have the core return a command (for example `NeedCustomerTier`) that the service executes and feeds back. Do not query the database from inside a validation function.
 5. **Services depend on interfaces, never concrete clients.** Concrete infrastructure appears only in live layers wired at startup (`provide` / `Layer`, or Elixir config). Never hardcode an HTTP client, pool, or SDK inside the service or the domain.
 6. **Don't mock what you don't own.** Wrap third-party SDKs (Google Ads, Twilio, Stripe) in your own narrow trait (`AdsGateway.createCampaign`). Fake the trait; integration-test the wrapper.
@@ -93,19 +123,19 @@ Your own database is a port you own (`ApptRepo`), not a vendor SDK. The service 
 
 ## 5. When effects and decisions interleave
 
-Do not fetch every effect result up front if that changes ordering (charging a card before inventory is reserved). Use one of these instead:
+Do not fetch every effect result up front if that changes ordering (charging a card before inventory is reserved). Use one of these instead. Either way, each effect line is still dumb dispatch (§3a): it performs the choice the previous pure step returned. It does not insert a new policy between steps ("also waive the fee if the customer is gold").
 
-**A. Split into pure steps**, with the service performing effects between them:
+**A. Split into pure steps**, with the service performing effects between them. The pure step returns the command; the edge only runs it, then feeds the receipt back as data:
 
 ```elixir
-with {:ok, inv, order} <- Order.Core.reserve(order, inventory),      # pure
-     {:ok, charge}     <- gateway().charge(order.total, order.card), # effect
-     {:ok, order}      <- Order.Core.finalize(order, charge) do       # pure
+with {:reserved, _inv, charge} <- Order.Core.reserve(order, inventory), # pure choice
+     {:ok, receipt} <- gateway().charge(charge.amount, charge.card),    # dumb: run it
+     {:ok, order} <- Order.Core.finalize(order, receipt) do              # pure, given the receipt
   ...
 end
 ```
 
-**B. Return commands (preferred for multi-effect flows).** The core returns a description of effects as data; the service interprets them.
+**B. Return commands (preferred for multi-effect flows).** The core returns a description of effects as data; the service interprets them. The interpreter is a straight loop or a total match — run this command, then the next — not a place for business rules.
 
 ```elixir
 def decide(order, inventory) do
@@ -119,6 +149,23 @@ end
 ```
 
 Commands make "which effects happen, in what order" pure and testable. `NeedCustomerTier` is the same idea when the next pure step needs data the core does not have yet.
+
+**Layer cake.** One workflow is one sandwich: I/O → pure → I/O. Stacking several decisions in one function (I/O → pure → I/O → pure → I/O) turns that sandwich into a layer cake. A short stack is fine when each effect is dumb dispatch and effect order must be preserved, as in A and B above. When the function keeps growing, or business conditionals show up between the effects, break it into shorter mini-workflows. Each one is a small sandwich: load what that decision needs, call one pure function, match the choice, perform the effects. The next workflow loads whatever the previous one persisted.
+
+Paying an invoice and warning on a large balance are two sandwiches, not two layers of `pay_invoice`:
+
+```elixir
+def warn_if_balance_too_large(customer_id) do
+  amounts = Invoices.load_unpaid_amounts!(customer_id)
+
+  case Balance.assess(amounts) do
+    :overdue_warning_needed -> Notifier.send_warning!(customer_id)
+    :no_action_needed -> :ok
+  end
+end
+```
+
+`Balance.assess` decides. `warn_if_balance_too_large` only sends, or does nothing. Folding that decision into `pay_invoice` would mix a second policy into the payment edge.
 
 ## 6. Referential transparency
 
@@ -137,7 +184,7 @@ Two rules, in this order:
 |---|---|---|---|
 | Domain (pure) | Functional core | Unit and property tests: input → output | **None.** |
 | Domain returning commands | Functional core | Unit tests asserting on emitted commands | **None.** |
-| Service | Imperative shell | Orchestration: fetch → decide → persist | In-memory fakes of your ports, `TestClock` / `TestRandom`. Mock an external dependency when the shell test is checking that call. |
+| Service | Imperative shell | Orchestration: fetch → pure decide → dumb dispatch | In-memory fakes of your ports, `TestClock` / `TestRandom`. Mock an external dependency when the shell test is checking that call. |
 | Adapters | Imperative shell | Integration test of one adapter | Real Postgres (Testcontainers, Ecto SQL Sandbox) or recorded HTTP (WireMock, Bypass). |
 | Wiring | Imperative shell | One smoke test: the layer graph builds and one request runs end to end | Real DB. External dependencies mocked through your ports. |
 | External HTTP / SDK | Imperative shell | Shell test of the integration, plus a wrapper test | Mock or fake the port you own (`PaymentGateway`, `AdsGateway`). Do not mock the vendor SDK type itself. |
@@ -246,6 +293,8 @@ Keep smoke and failure-path tests few: happy path plus one test per distinct fai
 | In-memory fake never run against the live adapter | One shared contract suite for both |
 | "Services can't do I/O" leads to awkward plumbing | Services may orchestrate I/O via interfaces; only concrete I/O is edge-only |
 | Charge-then-reserve (or similar) so one function can stay "pure" | Split steps or return commands; keep order |
+| Business rule in an effect branch (threshold, status check, "should we email / charge / call this API?") | Return a choice from the core; the branch only performs the effect |
+| One handler alternates I/O and decisions until it is a layer cake | Split into mini-workflows; each is one sandwich with dumb dispatch |
 | Unit test is mostly `expect` / `to receive` on internals | Purify the core; assert input → output |
 | Constructor takes five collaborator services | Pass the values those services would have fetched |
 
@@ -261,10 +310,12 @@ Keep smoke and failure-path tests few: happy path plus one test per distinct fai
 
 **Service layer**
 
-- [ ] Follows fetch → pure decide → persist shape
+- [ ] Follows fetch → pure decide → dumb dispatch
 - [ ] Depends only on interfaces in the environment, not concrete clients
 - [ ] Business rules are delegated to the domain, not inlined here
+- [ ] Effect branches only match the pure choice and perform it — no threshold, status check, or "should we call?" in the branch
 - [ ] No I/O in the middle of a decision; data fetched up front or requested via command
+- [ ] A growing layer cake is split into mini-workflows, each one sandwich
 
 **Adapters / edge**
 

@@ -20,12 +20,25 @@ _Avoid_: Bill, payment request
 **Customer**:
 A person or organization that places orders.
 _Avoid_: Client, buyer, account
+
+**Check number**:
+The distinct value that identifies a check.
+_Avoid_: a raw integer
+
+**Payment method**:
+A choice of cash, a check identified by its check number, or a card with its card info.
+_Avoid_: a status string; one record with optional check and card fields
+
+**Payment**:
+An amount, a currency, and a payment method together.
+_Avoid_: a decimal plus free-form strings
 ```
 
 ## Rules
 
 - **Be opinionated.** When multiple words exist for the same concept, pick the best one and list the others under `_Avoid_`.
 - **Keep definitions tight.** One or two sentences max. Define what it IS, not what it does.
+- **State the shape.** A real-world term is a distinct value (not a raw number or string), a choice (name what each alternative carries), or a composite (name the parts, each of which is itself a term). Put that in words. Do not put type syntax in the glossary. Under `_Avoid_`, reject the collapsed form: a bare primitive, a status string, or one record with optional fields for every alternative.
 - **Only include terms specific to this project's context.** General programming concepts (timeouts, error types, utility patterns) don't belong even if the project uses them extensively. Before adding a term, ask: is this a concept unique to this context, or a general programming concept? Only the former belongs.
 - **Group terms under subheadings** when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
 

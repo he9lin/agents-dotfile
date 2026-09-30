@@ -150,6 +150,18 @@ let area shape =
 
 // Single-case DU = zero-cost domain wrapper
 type PromotionId = PromotionId of string
+type CheckNumber = CheckNumber of int
+type CardNumber = CardNumber of string
+type PaymentAmount = PaymentAmount of decimal
+
+type CardType = Visa | Mastercard
+type CreditCardInfo = { CardType: CardType; CardNumber: CardNumber }
+
+// OR whose cases carry data — not an enum plus optional fields
+type PaymentMethod =
+    | Cash
+    | Check of CheckNumber
+    | Card of CreditCardInfo
 ```
 
 - **Illegal states:** DUs, single-case unions for wrappers, and **units of measure** (`[<Measure>] type usd`) — a distinctive strength for money, time, and quantities.
