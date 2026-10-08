@@ -35,6 +35,7 @@ Separate **deciding** from **doing**. Full rules: `reference/functional-core.md`
 
 - The **functional core** decides. Pure functions take data and return data or commands. No I/O, no database, no HTTP, no clock, no randomness, no process messaging, no logging, no effect type in the signature. Pass `now` and ids in. If the core needs another fact mid-decision, the shell fetches it or the core returns a command (`NeedCustomerTier`) and the shell feeds the result back. Thresholds, status changes, and "should we call this API?" all live here.
 - The **imperative shell** does. It fetches inputs, calls the core, performs the effects the core asked for, and persists results. It is the only place that talks to databases, HTTP, clocks, and SDKs. Anything that evolves an effect — I/O or an external API — makes only a **dumb decision** from the pure result: match the choice (`FullyPaid` → mark paid and post the event, `PartiallyPaid` → save the invoice, `NoActionNeeded` → do nothing) and carry it out. A business rule inside that branch has leaked out of the core. Full rule: `reference/functional-core.md` §3a.
+- **Dependencies stay on the outermost edge**, so a core test never stubs them. With `ZIO` or Effect-TS, return the effect value and provide the dependencies when you run it. Without that library, pass them as arguments of the outermost function (`pay_invoice(command, invoices, events)`). Do not pass them into the pure function, and do not call `Invoices` or `Repo` directly from the edge.
 
 **Unit tests of the functional core use no mocks.** Construct data, call the function, assert on the output, including emitted commands. No stubs, no `expect` / `to receive`, no test doubles. If a core unit test seems to need a mock, the code is not pure yet — move the I/O to the shell instead of mocking.
 
@@ -124,7 +125,8 @@ Scan in two passes. Report every finding with **name, severity, location, and fi
 | Effect in domain logic | I/O, clock, `Repo`, `Logger`, `Effect`, or `ZIO` inside the core, including an effect type in the signature | move orchestration to the service; pass time and IDs as values; return data or commands |
 | Decision in the effect edge | an I/O or external-API branch contains a business rule (threshold, status check, "should we notify / charge / call?") | return a choice from the core; the branch only performs the effect |
 | Layer cake | one handler alternates many I/O and pure steps, with policy between them | split into mini-workflows; each is fetch → pure decide → dumb dispatch |
-| Core takes services | function args are `repo`, `gateway`, or a pile of collaborators | pass states and results; service does the calls |
+| Core takes services | function args are `repo`, `gateway`, or a pile of collaborators | pass states and results; dependencies stay arguments of the outermost edge, or a `ZIO` / `Effect` environment provided at run |
+| Hardcoded effect module | the edge calls `Invoices`, `Repo`, `Notifier`, or an SDK directly | pass that dependency as an argument of the outermost function, or return a `ZIO` / `Effect` and provide it at run |
 | Concrete client in the service | service holds an HTTP client, pool, or SDK | depend on a trait; provide the live impl at the edge |
 | Wide port | `query(sql)` or a pass-through of a vendor SDK | domain-shaped methods (`findDueReminders(date)`) |
 | Mocked unit test | a functional-core unit test uses a mock, stub, or `expect` / `to receive` | purify the core; assert input → output. No mocks in core unit tests |
@@ -176,6 +178,7 @@ Only for candidates you keep. Planning: design outputs 1–9. Review: violation 
 - Executing inside the model instead of writing an interpreter
 - Exposing a mutable/loop implementation as the combinator's public contract
 - Passing services into the core instead of values the service already fetched
+- Calling `Invoices`, `Repo`, or an SDK directly from the edge instead of taking that dependency as an argument, or returning a `ZIO` / `Effect` and providing it at run
 - Reading "push effects to the edges" as "the service may not do I/O"
 - Treating a `ZIO` / `Effect` program as an effect-free core because the value is referentially transparent until run
 - A functional-core unit test that needs a mock — the design is wrong, not the test

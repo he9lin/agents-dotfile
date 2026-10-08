@@ -38,7 +38,7 @@ Pushing the effect out is only half the rule. The code that performs it — serv
 | Ring | ZIO | Effect-TS | Elixir |
 |---|---|---|---|
 | Domain | plain functions, `Either` | plain functions | modules with no `Repo` |
-| Service | `ZIO` with traits in `R` | `Effect` with `Context.Tag` | context function calling behaviours |
+| Service | `ZIO` with traits in `R` | `Effect` with `Context.Tag` | outermost function takes behaviours as arguments |
 | Adapter | `ZLayer` live, wired with `provide` | `Layer` | `Repo`, HTTP client, impl selected in config |
 
 ## 3. Service shape: the sandwich
@@ -58,19 +58,25 @@ def reschedule(id: ApptId, t: Instant) =
 
 `Appt.reschedule` never sees a repo, clock, or effect type. The service passes it data, including "now," and it returns a new value plus events or commands describing what should happen. Saving `next` and sending `next.events` are dumb: the service does not inspect the appointment and decide whether to notify.
 
-Same shape in Elixir. `DateTime.utc_now/0` stays in the service; the domain receives `now`:
+**Dependencies stay on the outermost edge.** The pure core never receives them, so a core test passes data and asserts on data. It does not stub a repo, a clock, or a gateway.
+
+When you have `ZIO` or Effect-TS, return the effect value, as `reschedule` does above. The value describes the dependencies. Provide them once, at the outermost `provide` / `run`. Do not thread them through as arguments.
+
+Without that library, pass the dependencies as arguments of the outermost function only. The domain function still receives data:
 
 ```elixir
-def reschedule(id, new_time) do
-  with {:ok, appt} <- Appointments.get(id),
-       now = DateTime.utc_now(),
+def reschedule(id, new_time, appointments, clock, notify) do
+  with {:ok, appt} <- appointments.get(id),
+       now = clock.utc_now(),
        {:ok, next} <- Appt.reschedule(appt, new_time, now),
-       :ok <- Appointments.save(next) do
-    Enum.each(next.events, &Notify.send/1)
+       :ok <- appointments.save(next) do
+    Enum.each(next.events, &notify.send/1)
     {:ok, next}
   end
 end
 ```
+
+`Appt.reschedule` does not take `appointments`, `clock`, or `notify`.
 
 ## 3a. Dumb dispatch at the effect edge
 
@@ -82,27 +88,27 @@ Two legal shapes:
 2. **Choice match.** The core returns a closed sum. The edge has one branch per case. Each branch is a straight-line effect, or nothing.
 
 ```elixir
-def pay_invoice(command) do
-  unpaid = Invoices.load_unpaid!(command.invoice_id)
+def pay_invoice(command, invoices, events) do
+  unpaid = invoices.load_unpaid!(command.invoice_id)
 
   case Invoice.apply_payment(unpaid, command.payment) do
     :fully_paid ->
-      Invoices.mark_fully_paid!(command.invoice_id)
-      Events.post_invoice_paid!(command.invoice_id)
+      invoices.mark_fully_paid!(command.invoice_id)
+      events.post_invoice_paid!(command.invoice_id)
 
     {:partially_paid, updated} ->
-      Invoices.update!(updated)
+      invoices.update!(updated)
   end
 end
 ```
 
-`Invoice.apply_payment` decides fully versus partially paid. The handler does not re-check the amount, the status, or a threshold. A branch that asks "is this too large?", "should we notify?", or "is the customer overdue?" is a domain rule sitting on the effect edge. Move that rule into the core and return another choice (`:overdue_warning_needed` or `:no_action_needed`). The edge then sends the message, or does nothing.
+`invoices` and `events` stop at `pay_invoice`. `Invoice.apply_payment` does not take them. It decides fully versus partially paid. The handler does not re-check the amount, the status, or a threshold. A branch that asks "is this too large?", "should we notify?", or "is the customer overdue?" is a domain rule sitting on the effect edge. Move that rule into the core and return another choice (`:overdue_warning_needed` or `:no_action_needed`). The edge then sends the message, or does nothing.
 
 The same rule covers every effect, not only the database. The core names the effect as data (`Charge(amount, card)`, `SendWarning(customerId)`). The edge performs that effect. When a later pure step needs the outcome (a charge id, the row just written), the edge passes that outcome back in as data. It does not invent the next business step.
 
 ## 4. Design practices
 
-1. **Pass data into the core, not dependencies.** If a domain function takes a repo, client, or effect, it is not core.
+1. **Pass data into the core, not dependencies.** Dependencies are arguments of the outermost edge function, or the environment of a `ZIO` / `Effect` value provided at `run`. If a domain function takes a repo, client, or effect, it is not core.
 
    ```elixir
    # BAD: core receives a service it must call
@@ -128,12 +134,16 @@ Do not fetch every effect result up front if that changes ordering (charging a c
 **A. Split into pure steps**, with the service performing effects between them. The pure step returns the command; the edge only runs it, then feeds the receipt back as data:
 
 ```elixir
-with {:reserved, _inv, charge} <- Order.Core.reserve(order, inventory), # pure choice
-     {:ok, receipt} <- gateway().charge(charge.amount, charge.card),    # dumb: run it
-     {:ok, order} <- Order.Core.finalize(order, receipt) do              # pure, given the receipt
-  ...
+def checkout(order, inventory, gateway) do
+  with {:reserved, _inv, charge} <- Order.Core.reserve(order, inventory), # pure choice
+       {:ok, receipt} <- gateway.charge(charge.amount, charge.card),      # dumb: run it
+       {:ok, order} <- Order.Core.finalize(order, receipt) do              # pure, given the receipt
+    ...
+  end
 end
 ```
+
+`gateway` is an argument of `checkout` only. `Order.Core.reserve` and `Order.Core.finalize` do not take it.
 
 **B. Return commands (preferred for multi-effect flows).** The core returns a description of effects as data; the service interprets them. The interpreter is a straight loop or a total match — run this command, then the next — not a place for business rules.
 
@@ -155,11 +165,11 @@ Commands make "which effects happen, in what order" pure and testable. `NeedCust
 Paying an invoice and warning on a large balance are two sandwiches, not two layers of `pay_invoice`:
 
 ```elixir
-def warn_if_balance_too_large(customer_id) do
-  amounts = Invoices.load_unpaid_amounts!(customer_id)
+def warn_if_balance_too_large(customer_id, invoices, notifier) do
+  amounts = invoices.load_unpaid_amounts!(customer_id)
 
   case Balance.assess(amounts) do
-    :overdue_warning_needed -> Notifier.send_warning!(customer_id)
+    :overdue_warning_needed -> notifier.send_warning!(customer_id)
     :no_action_needed -> :ok
   end
 end
@@ -296,7 +306,8 @@ Keep smoke and failure-path tests few: happy path plus one test per distinct fai
 | Business rule in an effect branch (threshold, status check, "should we email / charge / call this API?") | Return a choice from the core; the branch only performs the effect |
 | One handler alternates I/O and decisions until it is a layer cake | Split into mini-workflows; each is one sandwich with dumb dispatch |
 | Unit test is mostly `expect` / `to receive` on internals | Purify the core; assert input → output |
-| Constructor takes five collaborator services | Pass the values those services would have fetched |
+| Constructor takes five collaborator services | Pass the values those services would have fetched. Dependencies are arguments of the outermost edge only |
+| Edge calls `Invoices`, `Repo`, `Notifier`, or an SDK directly | Pass that dependency as an argument of the outermost function, or return a `ZIO` / `Effect` and provide it at run |
 
 ## 9. Checklist
 
@@ -311,7 +322,8 @@ Keep smoke and failure-path tests few: happy path plus one test per distinct fai
 **Service layer**
 
 - [ ] Follows fetch → pure decide → dumb dispatch
-- [ ] Depends only on interfaces in the environment, not concrete clients
+- [ ] Dependencies are arguments of this outermost function, or a `ZIO` / `Effect` environment provided at run. The core does not receive them. The function does not call a concrete module directly
+- [ ] Depends only on interfaces, not concrete clients
 - [ ] Business rules are delegated to the domain, not inlined here
 - [ ] Effect branches only match the pure choice and perform it — no threshold, status check, or "should we call?" in the branch
 - [ ] No I/O in the middle of a decision; data fetched up front or requested via command
