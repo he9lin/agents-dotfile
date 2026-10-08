@@ -33,6 +33,44 @@ const stack = (a: Promotion, b: Promotion): Promotion => ...
 
 Every domain concept that could be a raw primitive gets a **wrapper type** (`PromotionId`, not `string`; `Cents`, not `number`).
 
+### Real-world data
+
+Always model a real-world concept as an **abstract data type** or a **discriminated union**. Never as a raw `string`, `number`, or `decimal`, and never as a status string plus optional fields.
+
+Three forms. Use the smallest one that fits, then build upward. The top-level type contains only domain types.
+
+1. **Distinct value** (abstract data type). A single-case wrapper hides the primitive: `CheckNumber`, `CardNumber`, `PaymentAmount`. A check number is not an `int`. In F# this is a single-case union (`CheckNumber of int`); in Rust a newtype; in TypeScript a brand. Smart constructors are the only way in.
+2. **Choice** (discriminated union, OR). Alternatives, and a case may carry data. `PaymentMethod` is cash, or a check carrying a `CheckNumber`, or a card carrying `CreditCardInfo`. That is not a simple enum, and not one record with `checkNumber?` and `card?`.
+3. **Composite** (record, AND). Several domain types that must occur together. `CreditCardInfo` is a card type and a card number. `Payment` is an amount and a currency and a method.
+
+```ts
+type CheckNumber = number & { readonly __brand: "CheckNumber" };
+type CardNumber = string & { readonly __brand: "CardNumber" };
+type PaymentAmount = number & { readonly __brand: "PaymentAmount" };
+
+type CardType = { kind: "visa" } | { kind: "mastercard" };
+
+type CreditCardInfo = {
+  readonly cardType: CardType;
+  readonly cardNumber: CardNumber;
+};
+
+type PaymentMethod =
+  | { kind: "cash" }
+  | { kind: "check"; checkNumber: CheckNumber }
+  | { kind: "card"; card: CreditCardInfo };
+
+type Currency = { kind: "eur" } | { kind: "usd" };
+
+type Payment = {
+  readonly amount: PaymentAmount;
+  readonly currency: Currency;
+  readonly method: PaymentMethod;
+};
+```
+
+This data type is the representation. The abstract data type in the overview — a type plus the operations that construct and combine it — sits on top when the concept is also a behavior (a policy, a grammar). A noun still gets a wrapper, a union, or a record. Do not leave it as a primitive because it has no combinators.
+
 ---
 
 ## 2. Choose the Encoding
@@ -223,18 +261,20 @@ domain model ──interpreter──► service (ZIO/Effect via interfaces) ─�
    (pure)                         (orchestration)                    (concrete I/O)
 ```
 
+The interpreter that performs effects is dumb dispatch. It matches the pure choice and runs the corresponding write or call (`FullyPaid` → mark paid, `PartiallyPaid` → save, `NoActionNeeded` → do nothing). A threshold or "should we call?" inside that match is domain logic and belongs in the model. See `functional-core.md` §3a. One workflow stays one sandwich; a stack of alternating I/O and decisions is a layer cake and splits into mini-workflows (§5).
+
 This is the FP counterpart of the DDD boundary rule: never cross contexts directly; convert types at the edge.
 
 ---
 
 ## Checklist
 
-- [ ] Every domain concept is an ADT or wrapper type — no raw primitives
+- [ ] Every real-world concept is a distinct value (wrapper), a discriminated union (cases may carry data), or a record of those types — no raw primitives, no status string plus optional fields
 - [ ] Candidate domains were hunted (scheduler, parser, filter, stream, worker, …) and skips named
 - [ ] The encodings were chosen deliberately (model + combinator) and stated
 - [ ] Operators close over the domain type (no void/Unit/nil returns)
 - [ ] Primitives are minimal and orthogonal; the rest are derived
 - [ ] Each execution concern is a separate interpreter
 - [ ] Illegal states are prevented at the strongest level the language allows
-- [ ] Functional core takes values, not services. The imperative shell fetches, calls the core, and performs effects. Inside the shell, the service uses interfaces and adapters own concrete I/O
+- [ ] Functional core takes values, not services, and holds every domain decision. The imperative shell fetches, calls the core, and dumb-dispatches effects from the pure choice. Inside the shell, the service uses interfaces and adapters own concrete I/O. A layer cake splits into mini-workflows
 - [ ] Functional-core unit tests have no mocks. Imperative-shell tests may mock external dependencies only, and use the real database. Fakes share a contract suite with the live adapter
