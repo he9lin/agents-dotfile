@@ -450,6 +450,15 @@
       "skillFolderHash": "b0cd1d58b0c317cf7c3726fef7e6b1197c405246",
       "installedAt": "2026-10-12T21:08:02.896Z",
       "updatedAt": "2026-10-12T21:08:02.896Z"
+    },
+    "ub-mode": {
+      "source": "unclebob/ub-mode",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/unclebob/ub-mode.git",
+      "skillPath": "SKILL.md",
+      "skillFolderHash": "64ce6cc705c6adb05c9e2231f670ba283883ff13",
+      "installedAt": "2026-10-26T16:27:50.863Z",
+      "updatedAt": "2026-10-26T16:27:50.863Z"
     }
   },
   "dismissed": {
