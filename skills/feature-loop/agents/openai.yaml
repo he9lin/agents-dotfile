@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feature Loop"
+  short_description: "Functional design with independent model review"
+  default_prompt: "Use $feature-loop to implement this feature with functional-design and up to two review-design passes by a different model."
